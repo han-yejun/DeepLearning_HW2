@@ -317,3 +317,205 @@
 
  결과적으로, LeNet-5 모델이 더 높은 정확도를 보이며 알려진 정확도에 근접한 결과를 달성했음을 확인할 수 있습니다. 이는 해당 모델이 복잡한 이미지 분류 작업에 매우 적합하며, 기대하는 성능을 충족시키고 있음을 시사합니다.
 
+# 배치 정규화와 드롭아웃 사용
+## dataset.py
+
+        import torch
+        from torchvision.datasets import MNIST as TorchMNIST
+        from torch.utils.data import Dataset, DataLoader
+        from torchvision import transforms
+        
+        class MNIST(Dataset):
+            def __init__(self, root_dir, train=True, transform=None):
+                self.mnist_data = TorchMNIST(root=root_dir, train=train, download=True, transform=transform)
+        
+            def __len__(self):
+                return len(self.mnist_data)
+        
+            def __getitem__(self, idx):
+                return self.mnist_data[idx]
+        
+        # 데이터 변환 정의
+        transform = transforms.Compose([
+            transforms.ToTensor(),
+        ])
+        
+        # 훈련 데이터셋과 테스트 데이터셋 불러오기
+        trn_dataset = MNIST('C:/Users/yejun/OneDrive/문서/mnist-classification/data/train', train=True, transform=transform)
+        tst_dataset = MNIST('C:/Users/yejun/OneDrive/문서/mnist-classification/data/test', train=False, transform=transform)
+        
+        # 데이터로더 설정
+        trn_loader = DataLoader(trn_dataset, batch_size=batch_size, shuffle=True)
+        tst_loader = DataLoader(tst_dataset, batch_size=batch_size, shuffle=False)
+
+## model.py
+
+        import torch.nn as nn
+        
+        class LeNet5(nn.Module):
+            """ LeNet-5 (LeCun et al., 1998)
+        
+                - 자세한 아키텍처는 강의 노트를 참조하세요
+                - 활성화 함수는 자유롭게 선택하세요
+                - 하향 샘플링에 대해서는 kernel_size = (2,2)의 max pooling을 사용하세요
+                - 출력은 로짓 벡터여야 합니다
+            """
+        
+            def __init__(self):
+                super(LeNet5, self).__init__()
+        
+                # Convolutional Layer
+                self.conv1 = nn.Conv2d(1, 6, kernel_size=5)
+                self.conv2 = nn.Conv2d(6, 16, kernel_size=5)
+        
+                # Batch Normalization Layers
+                self.bn1 = nn.BatchNorm2d(6)
+                self.bn2 = nn.BatchNorm2d(16)
+        
+                # Fully Connected Layers
+                self.fc1 = nn.Linear(16 * 4 * 4, 120)
+                self.fc2 = nn.Linear(120, 84)
+                self.fc3 = nn.Linear(84, 10)
+        
+                # Dropout Layer
+                self.dropout = nn.Dropout(0.5)
+        
+            def forward(self, img):
+                # Convolutional Layer -> Batch Normalization -> ReLU -> Max Pooling
+                x = nn.functional.relu(self.bn1(self.conv1(img)))
+                x = nn.functional.max_pool2d(x, kernel_size=2, stride=2)
+                # Convolutional Layer -> Batch Normalization -> ReLU -> Max Pooling
+                x = nn.functional.relu(self.bn2(self.conv2(x)))
+                x = nn.functional.max_pool2d(x, kernel_size=2, stride=2)
+                # Flatten
+                x = x.view(-1, 16 * 4 * 4)
+                # Fully Connected Layers -> ReLU -> Dropout
+                x = nn.functional.relu(self.fc1(x))
+                x = nn.functional.relu(self.fc2(x))
+                x = self.dropout(x)
+                # Output Layer
+                output = self.fc3(x)
+        
+                return output
+
+## main.py
+
+        import torch
+        import torch.nn as nn
+        import torch.optim as optim
+        from torch.utils.data import DataLoader
+        from torchvision import transforms
+        from dataset import MNIST
+        from model import LeNet5
+        import matplotlib.pyplot as plt
+        
+        # Device 설정
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        
+        # 하이퍼파라미터 설정
+        learning_rate = 0.001
+        batch_size = 64
+        epochs = 10
+        
+        # 데이터 로드 및 변환
+        transform = transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Normalize((0.1307,), (0.3081,))
+        ])
+        
+        trn_dataset = MNIST('C:/Users/yejun/OneDrive/문서/mnist-classification/data/train', transform=transform)
+        tst_dataset = MNIST('C:/Users/yejun/OneDrive/문서/mnist-classification/data/test', transform=transform)
+        
+        trn_loader = DataLoader(trn_dataset, batch_size=batch_size, shuffle=True)
+        tst_loader = DataLoader(tst_dataset, batch_size=batch_size, shuffle=False)
+        
+        # 모델 초기화
+        model = LeNet5().to(device)
+        
+        # 손실 함수 및 최적화 기준 설정
+        criterion = nn.CrossEntropyLoss()
+        optimizer = optim.Adam(model.parameters(), lr=learning_rate)
+        
+        # 모델 훈련 및 평가
+        def train(model, trn_loader, device, criterion, optimizer):
+            model.train()
+            running_loss = 0.0
+            correct = 0
+            total = 0
+        
+            for data, target in trn_loader:
+                data, target = data.to(device), target.to(device)
+                optimizer.zero_grad()
+                outputs = model(data)
+                loss = criterion(outputs, target)
+                loss.backward()
+                optimizer.step()
+                running_loss += loss.item()
+                _, predicted = outputs.max(1)
+                total += target.size(0)
+                correct += predicted.eq(target).sum().item()
+        
+            trn_loss = running_loss / len(trn_loader)
+            trn_acc = 100. * correct / total
+            return trn_loss, trn_acc
+        
+        def test(model, tst_loader, device, criterion):
+            model.eval()
+            running_loss = 0.0
+            correct = 0
+            total = 0
+        
+            with torch.no_grad():
+                for data, target in tst_loader:
+                    data, target = data.to(device), target.to(device)
+                    outputs = model(data)
+                    loss = criterion(outputs, target)
+                    running_loss += loss.item()
+                    _, predicted = outputs.max(1)
+                    total += target.size(0)
+                    correct += predicted.eq(target).sum().item()
+        
+            tst_loss = running_loss / len(tst_loader)
+            tst_acc = 100. * correct / total
+            return tst_loss, tst_acc
+        
+        def run_model(model, trn_loader, tst_loader, device):
+            trn_losses, tst_losses, trn_accs, tst_accs = [], [], [], []
+            for epoch in range(epochs):
+                trn_loss, trn_acc = train(model, trn_loader, device, criterion, optimizer)
+                tst_loss, tst_acc = test(model, tst_loader, device, criterion)
+                trn_losses.append(trn_loss)
+                tst_losses.append(tst_loss)
+                trn_accs.append(trn_acc)
+                tst_accs.append(tst_acc)
+                print(f'Epoch [{epoch+1}/{epochs}], Trn Loss: {trn_loss:.4f}, Trn Acc: {trn_acc:.2f}%, '
+                      f'Test Loss: {tst_loss:.4f}, Test Acc: {tst_acc:.2f}%')
+        
+            plt.figure(figsize=(12, 5))
+            plt.subplot(1, 2, 1)
+            plt.plot(trn_losses, label='Training Loss')
+            plt.plot(tst_losses, label='Test Loss')
+            plt.xlabel('Epoch')
+            plt.ylabel('Loss')
+            plt.title('Training and Test Losses')
+            plt.legend()
+            plt.subplot(1, 2, 2)
+            plt.plot(trn_accs, label='Training Accuracy')
+            plt.plot(tst_accs, label='Test Accuracy')
+            plt.xlabel('Epoch')
+            plt.ylabel('Accuracy')
+            plt.title('Training and Test Accuracies')
+            plt.legend()
+            plt.show()
+        
+        # 모델 실행
+        if __name__ == '__main__':
+            run_model(model, trn_loader, tst_loader, device)
+
+![Training and Validation Performance over Epochs](https://github.com/han-yejun/DeepLearning_HW2/blob/main/Training%20and%20Validation%20Performance%20over%20Epochs.png)
+
+
+
+# 후기
+정말 하나도 모르겠지만 했습니다. 제가 잘한 건지, 제대로 한 건지도 모르겠습니다. 검색도 어찌해야할지 몰라 전부 chatGPT의 도움을 받았습니다. 그래도 정말 힘들고 좋은 경험이었습니다.
+
